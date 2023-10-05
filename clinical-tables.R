@@ -120,4 +120,184 @@ rx_adsl_tbl <- adsl_summary |>
 
 print(rx_adsl_tbl)
 
-# END
+
+## Response / Event Rate analysis Tables ----
+
+# In another table, we summarize the number of subjects with an event per 
+# intervention in the subgroup defined by the age groups.
+
+# Within each intervention group, we are counting the number and percentage
+# of participants with an event (`EVNTFL == "Y"`) as well as the total number
+# of participants.
+
+# The number of participants with an event divided by the number without an event are
+# the odds of experiencing the event per study intervention.
+
+# The odds ratio is then computed as the odds under Drug 1 divided by the odds
+# under Placebo.
+
+# The below code performs the calculation outlined above within the subgroup defined
+# by `AAGEGR1`, where confidence intervals around the event rates are computed
+# using the Clopper Pearson method.
+rx_responders <- 
+  rx_adsl |> 
+  dplyr::filter(ITTFL == "Y") |> 
+  dplyr::group_by(TRTA, AAGEGR1) |> 
+  dplyr::summarize(
+    n_resp = sum(EVNTFL == "Y"),
+    n_total = dplyr::n(),
+    pct = 100 * sum(EVNTFL == "Y") / dplyr::n(),
+    ci_up = 100 * (
+      1 + (dplyr::n() - sum(EVNTFL == "Y")) / (
+        (sum(EVNTFL == "Y") + 1) * qf(
+          0.975,
+          2 * (sum(EVNTFL == "Y") + 1),
+          2 * (dplyr::n() - sum(EVNTFL == "Y"))
+        )
+      )
+    )^(-1),
+    ci_low = ifelse(
+      sum(EVNTFL == "Y") == 0,
+      0,
+      100 * (
+        1 + (dplyr::n() - sum(EVNTFL == "Y") + 1) /
+          (sum(EVNTFL == "Y") * qf(
+            0.025,
+            2 * sum(EVNTFL == "Y"),
+            2 * (dplyr::n() - sum(EVNTFL == "Y") + 1)
+          )
+          )
+      )^(-1)
+    ),
+    odds = sum(EVNTFL == "Y") / (dplyr::n() - sum(EVNTFL == "Y")),
+    .groups = "drop"
+  ) |> 
+  tidyr::pivot_wider(
+    id_cols = AAGEGR1,
+    names_from = TRTA,
+    values_from = c(n_resp, n_total, pct, ci_up, ci_low, odds)
+  ) |> 
+  dplyr::mutate(
+    or = ifelse(
+      odds_Placebo == 0,
+      NA_real_,
+      !! rlang::sym("odds_Drug 1") / odds_Placebo
+    ),
+    or_ci_low = exp(
+      log(or) - qnorm(0.975) * sqrt(
+        1 / n_resp_Placebo +
+          1 / !!rlang::sym("n_resp_Drug 1") + 
+          1 / (n_total_Placebo - n_resp_Placebo) + 
+          1 / (!!rlang::sym("n_total_Drug 1") - !!rlang::sym("n_resp_Drug 1"))
+      )
+    ),
+    or_ci_up = exp(
+      log(or) + qnorm(0.975) * sqrt(
+        1 / n_resp_Placebo + 
+          1 / !!rlang::sym("n_resp_Drug 1") +
+          1 / (n_total_Placebo - n_resp_Placebo) +
+          1 / (!!rlang::sym("n_total_Drug 1") - !!rlang::sym("n_resp_Drug 1"))
+      )
+    )
+  ) |> 
+  dplyr::select(-tidyselect::starts_with("odds_"))
+
+print(rx_responders)
+
+# Let0s first create a basic gt table with a left-aligned table title and subtitle.
+rx_resp_tbl <- rx_responders |> 
+  gt() |> 
+  tab_header(
+    title = "x.x: Efficacy Data",
+    subtitle = "x.x.x: Occurrence of Event per Subgroup - {gt} Analysis Set"
+  ) |> 
+  opt_align_table_header(align = "left")
+
+print(rx_resp_tbl)
+
+
+# Next, we format the columns for counts to integers with `fmt_integer()`,
+# percentages and CI's around percentages as numbers with one decimal
+# and odds ratio and the CI around the odds ratio as numbers with two decimals,
+# in both cases using `fmt_number()`.
+rx_resp_tbl <- rx_resp_tbl |> 
+  fmt_integer(columns = dplyr::starts_with("n_")) |> 
+  fmt_number(columns = dplyr::starts_with(c("pct_", "ci_")), decimals = 1) |> 
+  fmt_number(columns = dplyr::starts_with("or"), decimals = 2)
+
+rx_resp_tbl
+
+
+# We can now merge the columns for participants with events, total number of participants
+# and percentage of participants with events, as well as the 95% CIs around the
+# event rate using `cols_merge()`.
+# To indicate the intervention group, we are adding tab spanners with
+# `tab_spanner()`.
+rx_resp_tbl <- rx_resp_tbl |> 
+  cols_merge(
+    columns = c("n_resp_Placebo", "n_total_Placebo", "pct_Placebo"),
+    pattern = "{1}/{2} ({3})"
+  ) |> 
+  cols_merge(
+    columns = c("ci_low_Placebo", "ci_up_Placebo"),
+    pattern = "[{1}, {2}]"
+  ) |> 
+  cols_merge(
+    columns = c("ci_low_Drug 1", "ci_up_Drug 1"),
+    pattern = "[{1}, {2}]"
+  ) |> 
+  cols_merge(
+    columns = c("or_ci_low", "or_ci_up"),
+    pattern = "[{1}, {2}]"
+  ) |> 
+  tab_spanner(
+    label = "Drug 1",
+    columns = c("n_resp_Drug 1", "ci_low_Drug 1")
+  ) |> 
+  tab_spanner(
+    label = "Placebo",
+    columns = c("n_resp_Placebo", "ci_low_Placebo")
+  )
+
+print(rx_resp_tbl)
+
+
+# Let's group the two categories and highlight the fact that these are actually
+# age subgroups.
+# We use `tab_row_group()` to manually add a row group label *Age*.
+rx_resp_tbl <- rx_resp_tbl |> 
+  tab_row_group(
+    label = "Age",
+    rows = dplyr::everything()
+  )
+
+print(rx_resp_tbl)
+
+# As we now have the `tab_row_group()` label in place, we no longer need
+# the label for the first column and can assign and empty string.
+
+# Also, because of the two tab spanners, we can assign equal column labels
+# for event rates and 95% CIs in both intervention groups.
+rx_resp_tbl <- rx_resp_tbl |> 
+  cols_align(
+    align = "center",
+    columns = dplyr::starts_with(c("n_", "ci", "or"))
+  ) |> 
+  cols_label(
+    .list = c(
+      "AAGEGR1" = "",
+      "n_resp_Placebo" = "Event Rate (%)",
+      "ci_low_Placebo" = "[95% CI]",
+      "n_resp_Drug 1" = "Event Rate (%)",
+      "ci_low_Drug 1" = "[95% CI]",
+      "or" = "Odds ratio",
+      "or_ci_low" = "[95% CI]"
+    )
+  ) |> 
+  cols_width(
+    1 ~ px(80),
+    dplyr::everything() ~ px(120)
+  ) |> 
+  cols_align(align = "left", columns = 1)
+
+print(rx_resp_tbl)
