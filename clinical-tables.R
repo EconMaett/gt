@@ -301,3 +301,199 @@ rx_resp_tbl <- rx_resp_tbl |>
   cols_align(align = "left", columns = 1)
 
 print(rx_resp_tbl)
+
+
+# Finally, we make use of `tab_footnote()` and add a footnote to the columns
+# with the 95% CIs around event rates, indicating that these were derived
+# from the Clopper-Pearson method.
+# To change the default symbol choice of `tab_footnote()` from numbers to letters,
+# we add `tab_options(footnote.marks = letters)`.
+rx_resp_tbl <- rx_resp_tbl |> 
+  tab_footnote(
+    footnote = "Event rate 95% exact confidence interval uses the Clopper-Pearson method.",
+    locations = cells_column_labels(
+      columns = c("ci_low_Placebo", "ci_low_Drug 1")
+    ),
+    placement = "right"
+  ) |> 
+  tab_options(footnotes.marks = letters)
+
+print(rx_resp_tbl)
+
+
+## Protocol Deviation Table ----
+
+# For the summary table for protocol deviations (PDs) we use a second
+# CDISC-flavored dataset, `rx_addv`. It contains a summary row, indicating
+# if the IIT population in `rx_adsl` experienced at least one major PD or not.
+# Individual PDs are summarized.
+str(rx_addv)
+
+# We first use dplyr and tidyr to crate a tidy data set
+addv_sum <- rx_addv |> 
+  dplyr::group_by(TRTA) |> 
+  dplyr::mutate(
+    NTOT = dplyr::n_distinct(USUBJID),
+    .groups = "drop"
+  ) |> 
+  dplyr::group_by(TRTA, PARCAT1, PARAM, CRIT1FL) |> 
+  dplyr::summarise(
+    n = sum(AVAL, na.rm = TRUE),
+    pct = 100 * sum(AVAL, na.rm = TRUE) / mean(NTOT),
+    .groups = "drop"
+  ) |> 
+  tidyr::pivot_wider(
+    id_cols = c(PARCAT1, PARAM),
+    names_from = c(TRTA, CRIT1FL),
+    values_from = c(n, pct)
+  ) |> 
+  dplyr::mutate(dplyr::across(where(is.numeric), ~ ifelse(is.na(.), 0, .))) |> 
+  dplyr::add_row(PARAM = "Subjects with at least:", .before = 1)
+
+print(addv_sum)
+
+# We start by exposing this dataset to `gt()` and add our usual left-aligned headers
+addv_tbl <- addv_sum |> 
+  gt(rowname_col = "PARAM") |> 
+  tab_header(
+    title = "xx.x: Demographic and Baseline Data",
+    subtitle = "xx.x.x: Major Protocol Deviations and Relationship to COVID-19 - ITT Set"
+  ) |> 
+  opt_align_table_header(align = "left")
+
+addv_tbl
+
+# Next, we create a summary row for all individual PDs to get the overall
+# number of individual PDs as well as the corresponding percentage.
+
+# For this, we first create a row group for individual PDs using
+# `tab_row_group()` applied to all rows where `PARCAT1` equals `PROTOCOL DEVIATIONS`.
+# Then we arrange the order of the row groups to list individual PDs after
+# the overall summary.
+# Finally, we create a summary row with `summary_rows()` to sum up all
+# columns with `n`'s and percentages.
+addv_tbl <- addv_tbl |> 
+  tab_row_group(
+    label = " ",
+    rows = PARCAT1 == "PROTOCOL DEVIATION"
+  ) |> 
+  row_group_order(groups = c(NA, " ")) |> 
+  summary_rows(
+    groups = " ",
+    columns = where(is.numeric),
+    fns = list(
+      label = "Study Procedure Deviations",
+      fn = "sum"
+    ), 
+    side = "top"
+  )
+
+print(addv_tbl)
+
+# We only kept the column `PARCAT1` to facilitate the generation of the row group.
+# We can hide this column with `cols_hide()`:
+addv_tbl <- addv_tbl |> 
+  cols_hide(columns = "PARCAT1")
+
+print(addv_tbl)
+
+# The table has roughly the right shape and we can start to format all
+# numeric columns and merge columns for  `n`s and percentages by
+# intervention group and COVID-19 relationship flag.
+addv_tbl <- addv_tbl |> 
+  sub_missing(
+    rows = 1,
+    missing_text = ""
+  ) |> 
+  fmt_number(
+    columns = dplyr::starts_with("pct"),
+    decimals = 1
+  ) |> 
+  cols_merge_n_pct(
+    col_n = "n_Placebo_Y",
+    col_pct = "pct_Placebo_Y"
+  ) |> 
+  cols_merge_n_pct(
+    col_n = "n_Placebo_N",
+    col_pct = "pct_Placebo_N"
+  ) |> 
+  cols_merge_n_pct(
+    col_n = "n_Placebo_N",
+    col_pct = "pct_Placebo_N"
+  ) |> 
+  cols_merge_n_pct(
+    col_n = "n_Drug 1_Y",
+    col_pct = "pct_Drug 1_Y"
+  ) |> 
+  cols_merge_n_pct(
+    col_n = "n_Drug 1_N",
+    col_pct = "pct_Drug 1_N"
+  )
+
+print(addv_tbl)
+
+# We can now modify the column names and create a cascade of column spanners.
+addv_tbl <- addv_tbl |> 
+  tab_spanner(
+    label = md("COVID-19 Related"),
+    columns = c("n_Placebo_Y", "n_Placebo_N"),
+    id = "cov_pla"
+  ) |> 
+  tab_spanner(
+    label = md("COVID-19 Related"),
+    columns = c("n_Drug 1_Y", "n_Drug 1_N"),
+    id = "cov_dru"
+  ) |> 
+  tab_spanner(
+    label = md("Placebo \n N=90 (100%) \n n (%)"),
+    columns = c("n_Placebo_Y", "n_Placebo_N")
+  ) |> 
+  cols_label(
+    .list = list(
+      "n_Placebo_Y" = "Yes",
+      "n_Placebo_N" = "No",
+      "n_Drug 1_Y" = "Yes",
+      "n_Drug 1_N" = "No"
+    ) 
+  )|> 
+  tab_style(
+    style = cell_text(align = "center"),
+    locations = cells_column_spanners(spanners = dplyr::everything())
+  )
+
+print(addv_tbl)
+
+# We can now add a footnote, indicating that subjects can haave more than one
+# PD during the course of the study.
+
+# The footnote is added with `tab_footnote()` to the row
+# "At least one major Protocol Deviation"
+addv_tbl <- addv_tbl |> 
+  tab_footnote(
+    footnote = "Subjects can have more than one Protocol Deviation throughout the study.",
+    locations = cells_stub(rows = c("At least one major Protocol Deviation")),
+    placement = "right"
+  )
+
+print(addv_tbl)
+
+# Finally, we can style the table, indenting the individual PDs under 
+# "Study Procedure Deviations", left-aligning the first columns and
+# centering all other columns.
+# Note that for the indentation, we can still use the hidden
+# column `PARCAT1` to identify individual PDs.
+addv_tbl |> 
+  cols_align(
+    align = "center",
+    columns = 3:6
+  ) |> 
+  cols_align(
+    align = "left",
+    columns = 1:2
+  ) |> 
+  tab_stub_indent(
+    rows = PARCAT1 == "PROTOCOL DEVIATION",
+    indent = 5
+  )
+
+# END
